@@ -1,6 +1,6 @@
 import requests
 from typing import Dict, List, Optional, Any
-from config import get_jwt, get_container_jwt, load_config
+from config import get_jwt, get_container_jwt, load_config, normalize_host, urlparse
 
 
 class AtScaleAPIClient:
@@ -10,12 +10,27 @@ class AtScaleAPIClient:
         
     def _get_base_url(self) -> str:
         """Get base URL based on instance type"""
-        host = self.config["host"]
+        host = normalize_host(self.config["host"])
+        
         if self.config.get("instance_type") == "installer":
             org = self.config["organization"]
-            return f"https://{host}:10500/{org}"
+            parsed_url = urlparse(host)
+            netloc = parsed_url.netloc
+            # For installer base URL, use port 10500
+            return f"{parsed_url.scheme}://{netloc}:10500/{org}"
         else:  # container
-            return f"https://{host}"
+            return host  # Already normalized with protocol
+    
+    def _build_installer_url(self, port: int, path: str) -> str:
+        """Build URL for installer instance with specific port"""
+        host = normalize_host(self.config["host"])
+        org = self.config["organization"]
+        parsed_url = urlparse(host)
+        netloc = parsed_url.netloc
+        # Remove any existing port from netloc and use the specified port
+        if ':' in netloc:
+            netloc = netloc.split(':')[0]
+        return f"{parsed_url.scheme}://{netloc}:{port}{path}"
     
     def _get_public_headers(self) -> Dict[str, str]:
         """Get headers for public API (uses static token)"""
@@ -46,9 +61,9 @@ class AtScaleAPIClient:
     def get_published_projects(self) -> List[Dict]:
         """Get published catalogs with models - PUBLIC API"""
         if self.config.get("instance_type") == "installer":
-            host = self.config["host"]
             org = self.config["organization"]
-            url = f"https://{host}:10502/projects/published/orgId/{org}"
+            # Use port 10502 for this endpoint
+            url = self._build_installer_url(10502, f"/projects/published/orgId/{org}")
             headers = self._get_public_headers()
         else:
             # CONTAINER PUBLIC API ENDPOINT
@@ -94,9 +109,9 @@ class AtScaleAPIClient:
     def get_aggregates_by_cube(self, catalog_id: str, model_id: str, limit: int = 200) -> Dict:
         """Get aggregates for a specific cube/model - PUBLIC API"""
         if self.config.get("instance_type") == "installer":
-            host = self.config["host"]
             org = self.config["organization"]
-            url = f"https://{host}:10502/aggregates/orgId/{org}?limit={limit}&projectId={catalog_id}&cubeId={model_id}"
+            # Use port 10502 for this endpoint
+            url = self._build_installer_url(10502, f"/aggregates/orgId/{org}?limit={limit}&projectId={catalog_id}&cubeId={model_id}")
         else:
             # CONTAINER PUBLIC API ENDPOINT
             url = f"{self.base_url}/v1/aggregates/instances?catalogId={catalog_id}&modelId={model_id}"
@@ -176,9 +191,9 @@ class AtScaleAPIClient:
     def rebuild_cube(self, catalog_id: str, model_id: str, is_full_build: bool = True) -> Dict:
         """Rebuild aggregates for a cube - PUBLIC API"""
         if self.config.get("instance_type") == "installer":
-            host = self.config["host"]
             org = self.config["organization"]
-            url = f"https://{host}:10502/aggregate-batch/orgId/{org}/projectId/{catalog_id}?cubeId={model_id}&isFullBuild={str(is_full_build).lower()}"
+            # Use port 10502 for this endpoint
+            url = self._build_installer_url(10502, f"/aggregate-batch/orgId/{org}/projectId/{catalog_id}?cubeId={model_id}&isFullBuild={str(is_full_build).lower()}")
             
             response = requests.post(
                 url, headers=self._get_public_headers(), verify=False, timeout=60
@@ -199,9 +214,9 @@ class AtScaleAPIClient:
     def get_aggregate_build_history(self, catalog_id: str, model_id: str, limit: int = 20) -> Dict:
         """Get aggregate build history - PRIVATE API (requires JWT for container)"""
         if self.config.get("instance_type") == "installer":
-            host = self.config["host"]
             org = self.config["organization"]
-            url = f"https://{host}:10502/aggregate-batch/orgId/{org}/history?limit={limit}&projectId={catalog_id}&cubeId={model_id}"
+            # Use port 10502 for this endpoint
+            url = self._build_installer_url(10502, f"/aggregate-batch/orgId/{org}/history?limit={limit}&projectId={catalog_id}&cubeId={model_id}")
             headers = self._get_public_headers()
         else:
             # CONTAINER PRIVATE API ENDPOINT - requires JWT
@@ -249,19 +264,10 @@ class AtScaleAPIClient:
         history_data = container_data.get("data", [])
         total = container_data.get("total", 0)
         
-        # The container response already has the right field names
-        # We don't need to transform field names, just pass them through
-        # But we need to ensure all expected fields are present
-        
         transformed_history = []
         for batch in history_data:
-            # Create a new dict with all the original fields
-            # This ensures we don't have any reference issues
             transformed_batch = dict(batch)
-            
-            # Add any aliases if needed
             transformed_batch["batchId"] = transformed_batch.get("id", "")
-            
             transformed_history.append(transformed_batch)
         
         return {
@@ -273,11 +279,12 @@ class AtScaleAPIClient:
             }
         }
 
-    # Other methods remain similar but use _get_public_headers() for container
+    # Update other methods to use the new URL building approach
     def get_aggregates(self) -> List[Dict]:
         """Get list of all aggregates - PUBLIC API"""
         if self.config.get("instance_type") == "installer":
-            url = f"{self.base_url}/aggregates"
+            org = self.config["organization"]
+            url = self._build_installer_url(10502, f"/aggregates/orgId/{org}")
         else:
             url = f"{self.base_url}/v1/aggregates/instances"
         
@@ -290,7 +297,8 @@ class AtScaleAPIClient:
     def get_aggregate_details(self, aggregate_id: str) -> Dict:
         """Get details of a specific aggregate - PUBLIC API"""
         if self.config.get("instance_type") == "installer":
-            url = f"{self.base_url}/aggregates/{aggregate_id}"
+            org = self.config["organization"]
+            url = self._build_installer_url(10502, f"/aggregates/orgId/{org}/{aggregate_id}")
         else:
             url = f"{self.base_url}/v1/aggregates/instances/{aggregate_id}"
         
@@ -303,7 +311,8 @@ class AtScaleAPIClient:
     def create_aggregate(self, aggregate_data: Dict[str, Any]) -> Dict:
         """Create a new aggregate - PUBLIC API"""
         if self.config.get("instance_type") == "installer":
-            url = f"{self.base_url}/aggregates"
+            org = self.config["organization"]
+            url = self._build_installer_url(10502, f"/aggregates/orgId/{org}")
         else:
             url = f"{self.base_url}/v1/aggregates/definitions"
         
@@ -316,7 +325,8 @@ class AtScaleAPIClient:
     def update_aggregate(self, aggregate_id: str, aggregate_data: Dict[str, Any]) -> Dict:
         """Update an existing aggregate - PUBLIC API"""
         if self.config.get("instance_type") == "installer":
-            url = f"{self.base_url}/aggregates/{aggregate_id}"
+            org = self.config["organization"]
+            url = self._build_installer_url(10502, f"/aggregates/orgId/{org}/{aggregate_id}")
         else:
             url = f"{self.base_url}/v1/aggregates/definitions/{aggregate_id}"
         
@@ -329,7 +339,8 @@ class AtScaleAPIClient:
     def delete_aggregate(self, aggregate_id: str) -> bool:
         """Delete an aggregate - PUBLIC API"""
         if self.config.get("instance_type") == "installer":
-            url = f"{self.base_url}/aggregates/{aggregate_id}"
+            org = self.config["organization"]
+            url = self._build_installer_url(10502, f"/aggregates/orgId/{org}/{aggregate_id}")
         else:
             url = f"{self.base_url}/v1/aggregates/definitions/{aggregate_id}"
         
@@ -341,7 +352,8 @@ class AtScaleAPIClient:
     def refresh_aggregate(self, aggregate_id: str) -> Dict:
         """Refresh/rebuild a specific aggregate - PUBLIC API"""
         if self.config.get("instance_type") == "installer":
-            url = f"{self.base_url}/aggregates/{aggregate_id}/refresh"
+            org = self.config["organization"]
+            url = self._build_installer_url(10502, f"/aggregates/orgId/{org}/{aggregate_id}/refresh")
         else:
             url = f"{self.base_url}/v1/aggregates/instances/{aggregate_id}/refresh"
         

@@ -3,6 +3,7 @@ import os
 import json
 import requests
 import urllib3
+from urllib.parse import urlparse
 from typing import Dict, Tuple, Optional
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -30,6 +31,19 @@ def get_instance_type() -> str:
     return config.get("instance_type", "installer")
 
 
+def normalize_host(host: str) -> str:
+    """Normalize host URL to include protocol"""
+    if not host:
+        return host
+    
+    # Check if host already has a protocol
+    if host.startswith(('http://', 'https://')):
+        return host
+    
+    # Default to https if no protocol specified
+    return f"https://{host}"
+
+
 def get_jwt(force_refresh: bool = False) -> str:
     """
     Returns authentication token based on instance_type.
@@ -44,12 +58,17 @@ def get_jwt(force_refresh: bool = False) -> str:
         if _JWT_CACHE and not force_refresh:
             return _JWT_CACHE
 
-        host = config["host"]
+        host = normalize_host(config["host"])
         username = config["username"]
         password = config["password"]
         org = config["organization"]
         
-        url = f"https://{host}:10500/{org}/auth"
+        # Parse the host URL to extract netloc (hostname:port)
+        parsed_url = urlparse(host)
+        netloc = parsed_url.netloc
+        
+        # For installer, we need to use port 10500 for auth
+        url = f"{parsed_url.scheme}://{netloc}:10500/{org}/auth"
         resp = requests.get(
             url, auth=(username, password), verify=False, timeout=15
         )
@@ -89,14 +108,14 @@ def get_container_jwt(force_refresh: bool = False) -> Optional[str]:
     client_secret = config.get("client_secret")
     username = config.get("username")
     password = config.get("password")
-    host = config["host"]
+    host = normalize_host(config["host"])
     
     if not all([client_id, client_secret, username, password]):
         # Not all credentials available, return None
         return None
     
     # Get JWT via OIDC token endpoint
-    url = f"https://{host}/auth/realms/atscale/protocol/openid-connect/token"
+    url = f"{host}/auth/realms/atscale/protocol/openid-connect/token"
     data = {
         "client_id": client_id,
         "client_secret": client_secret,

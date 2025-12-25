@@ -77,6 +77,26 @@ For a container-based instance (OAuth):
 }
 ```
 
+**Host entry notes:**
+
+- If your server uses HTTP, include the protocol: `http://<host>` (e.g., `http://dev.example.com`).
+- If your server uses HTTPS, you can either provide just the hostname (e.g., `dev.example.com`) or include the protocol: `https://<host>` (both are accepted).
+- The **default port is `10500`**. To use a non-default port include it in the host value (e.g., `https://dev.example.com:10501`).
+
+**Examples:**
+
+```json
+{
+  "host": "http://dev.example.com"
+}
+```
+
+```json
+{
+  "host": "dev.example.com"
+}
+```
+
 > **Note:** Starting with **v2**, container (public API) instances are supported. For container instances you must provide a valid **`token`** in `config.json`. The `client_id` and `client_secret` are **optional** — some endpoints (for example, **aggregate build history**) may require OAuth client credentials; if provided the utility will use them to access those endpoints.
 
 
